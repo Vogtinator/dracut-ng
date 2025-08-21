@@ -14,6 +14,11 @@ else
     }
 fi
 
+# Checks if this system was booted through a BLS entry
+is_bls() {
+    [ -f /sys/firmware/efi/efivars/LoaderEntrySelected-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f ]
+}
+
 # Checks if a systemd-based UKI is running and ESP UUID is set
 is_uki() {
     [ -f /sys/firmware/efi/efivars/StubFeatures-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f ] \
@@ -23,7 +28,7 @@ is_uki() {
 mount_boot() {
     boot=$(getarg boot=)
 
-    if is_uki && [ -z "$boot" ]; then
+    if [ -z "$boot" ] && { is_uki || is_bls; }; then
         # efivar file has 4 bytes header and contain UCS-2 data. Note, 'cat' is required
         # as sys/firmware/efi/efivars/ files are 'special' and don't allow 'seeking'.
         # shellcheck disable=SC2002
@@ -185,6 +190,7 @@ do_fips() {
             # This is a UKI
             do_uki_check || return 1
         else
+            local bls=""
             BOOT_IMAGE="$(getarg BOOT_IMAGE)"
 
             # On s390x, BOOT_IMAGE isn't a path but an integer representing the
@@ -196,10 +202,18 @@ do_fips() {
                     BOOT_IMAGE="vmlinuz-${KERNEL}"
                 elif [ -d /boot/loader/entries ]; then
                     bls=$(find /boot/loader/entries -name '*.conf' | sort -rV | sed -n "$((BOOT_IMAGE + 1))p")
-                    if [ -e "${bls}" ]; then
-                        BOOT_IMAGE=$(grep ^linux "${bls}" | cut -d' ' -f2)
-                    fi
                 fi
+            fi
+
+            # If booted through BLS, get the kernel path from the selected entry
+            if [ -z "${BOOT_IMAGE}" ] && is_bls; then
+                # Can't seek, see above.
+                # shellcheck disable=SC2002
+                bls="/boot/loader/entries/$(cat /sys/firmware/efi/efivars/LoaderEntrySelected-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f | tail -c +5)"
+            fi
+
+            if [ -e "${bls}" ]; then
+                BOOT_IMAGE=$(grep ^linux "${bls}" | cut -d' ' -f2)
             fi
 
             # Trim off any leading GRUB boot device (e.g. ($root) )
